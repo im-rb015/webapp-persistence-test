@@ -3,29 +3,42 @@ from datetime import datetime
 from azure.data.tables import TableServiceClient
 from azure.core.exceptions import ResourceExistsError
 import os
+import logging
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
 
 def initialize_table():
     try:
-        # Get connection string from app settings
-        connection_string = os.environ['AZURE_STORAGE_CONNECTION_STRING']
-        table_name = "persistencetest"
+        # Log connection string (remove in production)
+        connection_string = os.environ.get('AZURE_STORAGE_CONNECTION_STRING')
+        logging.info(f"Connection string exists: {bool(connection_string)}")
+        
+        if not connection_string:
+            logging.error("No connection string found")
+            return None
 
+        table_name = "persistencetest"
+        logging.info("Creating table service client...")
+        
         # Create table client
         table_service = TableServiceClient.from_connection_string(connection_string)
+        logging.info("Table service client created")
         
-        # Create table if it doesn't exist
+        # Create table
         try:
             table_client = table_service.create_table(table_name)
-            print(f"Table {table_name} created successfully")
+            logging.info(f"Table {table_name} created successfully")
         except ResourceExistsError:
             table_client = table_service.get_table_client(table_name)
-            print(f"Table {table_name} already exists")
-        
+            logging.info(f"Using existing table {table_name}")
+        except Exception as e:
+            logging.error(f"Error creating/getting table: {str(e)}")
+            raise
+            
         return table_client
     except Exception as e:
-        print(f"Error initializing table: {str(e)}")
+        logging.error(f"Error in initialize_table: {str(e)}")
         return None
 
 # Initialize table client
@@ -47,18 +60,19 @@ def home():
 def add_data():
     try:
         if not table_client:
-            return "Error: Table not initialized"
+            logging.error("Table client is None")
+            return "Error: Table not initialized. Check logs for details."
 
         data = request.form.get('data')
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         
-        # Store in Azure Table
         entity = {
             "PartitionKey": "testdata",
             "RowKey": timestamp,
             "data": data
         }
         table_client.create_entity(entity=entity)
+        logging.info(f"Data added successfully: {data}")
         
         return f"""
         <h2>Data Added Successfully</h2>
@@ -66,13 +80,15 @@ def add_data():
         <a href="/">Add More</a> | <a href="/view">View All</a>
         """
     except Exception as e:
+        logging.error(f"Error adding data: {str(e)}")
         return f"Error adding data: {str(e)}"
 
 @app.route('/view')
 def view_data():
     try:
         if not table_client:
-            return "Error: Table not initialized"
+            logging.error("Table client is None")
+            return "Error: Table not initialized. Check logs for details."
 
         entities = table_client.query_entities(query_filter="PartitionKey eq 'testdata'")
         data_items = [f"{e['RowKey']}: {e['data']}" for e in entities]
@@ -94,6 +110,7 @@ def view_data():
         <a href="/">Back to Home</a>
         """
     except Exception as e:
+        logging.error(f"Error viewing data: {str(e)}")
         return f"Error viewing data: {str(e)}"
 
 if __name__ == '__main__':
