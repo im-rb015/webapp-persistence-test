@@ -1,20 +1,35 @@
 from flask import Flask, request
 from datetime import datetime
 from azure.data.tables import TableServiceClient
+from azure.core.exceptions import ResourceExistsError
 import os
 
 app = Flask(__name__)
 
-# Connect to Azure Storage Table
-connection_string = os.environ['AZURE_STORAGE_CONNECTION_STRING']
-table_name = "persistencetest"
+def initialize_table():
+    try:
+        # Get connection string from app settings
+        connection_string = os.environ['AZURE_STORAGE_CONNECTION_STRING']
+        table_name = "persistencetest"
 
-# Initialize Table Service
-table_service = TableServiceClient.from_connection_string(connection_string)
-try:
-    table_client = table_service.create_table_if_not_exists(table_name)
-except:
-    table_client = table_service.get_table_client(table_name)
+        # Create table client
+        table_service = TableServiceClient.from_connection_string(connection_string)
+        
+        # Create table if it doesn't exist
+        try:
+            table_client = table_service.create_table(table_name)
+            print(f"Table {table_name} created successfully")
+        except ResourceExistsError:
+            table_client = table_service.get_table_client(table_name)
+            print(f"Table {table_name} already exists")
+        
+        return table_client
+    except Exception as e:
+        print(f"Error initializing table: {str(e)}")
+        return None
+
+# Initialize table client
+table_client = initialize_table()
 
 @app.route('/')
 def home():
@@ -31,6 +46,9 @@ def home():
 @app.route('/add', methods=['POST'])
 def add_data():
     try:
+        if not table_client:
+            return "Error: Table not initialized"
+
         data = request.form.get('data')
         timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
         
@@ -48,18 +66,22 @@ def add_data():
         <a href="/">Add More</a> | <a href="/view">View All</a>
         """
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error adding data: {str(e)}"
 
 @app.route('/view')
 def view_data():
     try:
+        if not table_client:
+            return "Error: Table not initialized"
+
         entities = table_client.query_entities(query_filter="PartitionKey eq 'testdata'")
-        data_list = ["<br>".join([f"{e['RowKey']}: {e['data']}" for e in entities])]
+        data_items = [f"{e['RowKey']}: {e['data']}" for e in entities]
         
-        if data_list:
+        if data_items:
+            data_list = "<br>".join(data_items)
             return f"""
             <h2>Stored Data</h2>
-            {data_list[0]}
+            {data_list}
             <br><br>
             <p>This data will persist after restart!</p>
             <br>
@@ -72,7 +94,7 @@ def view_data():
         <a href="/">Back to Home</a>
         """
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error viewing data: {str(e)}"
 
 if __name__ == '__main__':
     app.run()
