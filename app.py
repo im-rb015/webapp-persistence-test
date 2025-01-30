@@ -1,19 +1,23 @@
 from flask import Flask, request
 from datetime import datetime
-import ssl
+from azure.data.tables import TableServiceClient
+import os
+
 app = Flask(__name__)
 
-ssl._create_default_https_context = ssl._create_unverified_context
+# Connect to Azure Storage Table
+connection_string = os.environ['AZURE_STORAGE_CONNECTION_STRING']
+table_name = "persistencetest"
 
-# This list stores data in memory (will be cleared when app restarts)
-data_store = []
+# Initialize Table Service
+table_service = TableServiceClient.from_connection_string(connection_string)
+try:
+    table_client = table_service.create_table_if_not_exists(table_name)
+except:
+    table_client = table_service.get_table_client(table_name)
 
 @app.route('/')
 def home():
-    # Creates a simple web form with:
-    # 1. Text input field
-    # 2. Submit button
-    # 3. Link to view data
     return """
     <h1>Web App Persistence Test</h1>
     <form action="/add" method="post">
@@ -26,38 +30,49 @@ def home():
 
 @app.route('/add', methods=['POST'])
 def add_data():
-    # When form is submitted:
-    # 1. Gets the entered data
-    # 2. Adds timestamp
-    # 3. Stores in data_store list
-    data = request.form.get('data')
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    data_store.append(f"{timestamp}: {data}")
-    return f"""
-    <h2>Data Added</h2>
-    <p>Added: {data} at {timestamp}</p>
-    <a href="/">Add More</a> | <a href="/view">View All</a>
-    """
+    try:
+        data = request.form.get('data')
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        
+        # Store in Azure Table
+        entity = {
+            "PartitionKey": "testdata",
+            "RowKey": timestamp,
+            "data": data
+        }
+        table_client.create_entity(entity=entity)
+        
+        return f"""
+        <h2>Data Added Successfully</h2>
+        <p>Added: {data} at {timestamp}</p>
+        <a href="/">Add More</a> | <a href="/view">View All</a>
+        """
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 @app.route('/view')
 def view_data():
-    # Shows all stored data
-    # If data remains after restart = Persistent
-    # If data disappears after restart = Not Persistent
-    if data_store:
-        data_list = "<br>".join(data_store)
-        return f"""
-        <h2>Stored Data</h2>
-        {data_list}
-        <br><br>
-        <p>If this data remains after restart, it's persistent!</p>
-        <br>
-        <a href="/">Back to Home</a>
-        """
-    else:
+    try:
+        entities = table_client.query_entities(query_filter="PartitionKey eq 'testdata'")
+        data_list = ["<br>".join([f"{e['RowKey']}: {e['data']}" for e in entities])]
+        
+        if data_list:
+            return f"""
+            <h2>Stored Data</h2>
+            {data_list[0]}
+            <br><br>
+            <p>This data will persist after restart!</p>
+            <br>
+            <a href="/">Back to Home</a>
+            """
         return """
         <h2>No Data Found</h2>
-        <p>Either no data added or data was lost (not persistent)</p>
+        <p>No data added yet</p>
         <br>
         <a href="/">Back to Home</a>
         """
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+if __name__ == '__main__':
+    app.run()
